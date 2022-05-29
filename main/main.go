@@ -1,36 +1,44 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"net/http"
-
 	"github.com/Fillip-Molodtsov-gophercising/urlshort"
+	"github.com/boltdb/bolt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+var (
+	serverAddress  = ":8080"
+	fileFlag       = "file"
+	dbName         = "url.db"
+	ymlFileDefault = "example.yml"
 )
 
 func main() {
-	mux := defaultMux()
-
-	// Build the MapHandler using the mux as the fallback
-	pathsToUrls := map[string]string{
-		"/yaml-godoc": "https://godoc.org/gopkg.in/yaml.v2",
-	}
-	mapHandler := urlshort.MapHandler(pathsToUrls, mux)
-
-	// Build the YAMLHandler using the mapHandler as the
-	// fallback
-	yaml := `
-- path: /urlshort
-  url: https://github.com/Fillip-Molodtsov-gophercising/urlshort
-`
-	yamlHandler, err := urlshort.YAMLHandler([]byte(yaml), mapHandler)
+	path := flag.String(fileFlag, defaultYml(), "The file where default short URLs are stored")
+	flag.Parse()
+	db, err := bolt.Open(dbName, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	fmt.Println("Starting the server on :8080")
-	http.ListenAndServe(":8080", yamlHandler)
+	defer db.Close()
+	urlshort.InitDBwYaml(db, path)
+
+	createHandler := urlshort.CreateHandler(db)
+	mux := appInitialMux()
+	mux.HandleFunc(urlshort.CreatePostPath, createHandler)
+	boltHandler := urlshort.BoltHandler(db, mux)
+
+	fmt.Printf("Starting the server on %s\n", serverAddress)
+	http.ListenAndServe(serverAddress, boltHandler)
 }
 
-func defaultMux() *http.ServeMux {
+func appInitialMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", hello)
 	return mux
@@ -38,4 +46,12 @@ func defaultMux() *http.ServeMux {
 
 func hello(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "Hello, world!")
+}
+
+func defaultYml() string {
+	pwd, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("Cannot find working directory: %v", err)
+	}
+	return filepath.Join(pwd, ymlFileDefault)
 }
